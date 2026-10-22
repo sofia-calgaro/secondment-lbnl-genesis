@@ -107,7 +107,7 @@ def finish_3d(ax, lo, hi):
     ax.set_xlim(lo[0], hi[0])
     ax.set_ylim(lo[1], hi[1])
     ax.set_zlim(lo[2], hi[2])
-    ax.set_box_aspect(np.maximum(hi - lo, 1.0))
+    #ax.set_box_aspect(np.maximum(hi - lo, 1.0))
     ax.view_init(elev=23, azim=-50)
     draw_box_3d(ax, lo, hi)
 
