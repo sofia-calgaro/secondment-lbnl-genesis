@@ -7,7 +7,7 @@ This repository contains tools to:
 - generate remage macros and job lists,
 - inspect simulation outputs and optical-step statistics.
 
-Each simulated voxel produces a `.lh5` output file. After the remage modification ([commit](https://github.com/Rashika-Gupta/remage-celeritas-int/commit/afa35e8dfcf44f575e7adc916e02b79499909994 )), the files include photon momentum information and the optical step records needed for the analysis.
+Each simulated voxel produces a `.lh5` output file. After the remage modification ([commit](https://github.com/Rashika-Gupta/remage-celeritas-int/commit/afa35e8dfcf44f575e7adc916e02b79499909994)), the files include photon momentum information and the optical step records needed for the analysis.
 
 Example structure of a generated `.lh5` file:
 
@@ -37,18 +37,34 @@ sh-5.1$ ~/.local/bin/lh5ls --depth 2 /tmp/test_direction.stp.lh5
 └── zloc · array<1>{real}
 ```
 
-## Requirements
+## Typical end-to-end use
 
-Python packages used by the scripts:
+- Build the grid/admissible voxel space via `voxel_and_sims/make_voxel_space.py`
+- Check the volume to sample via `plotting/ular_and_ge.py`
+- Generate the LF/HF/CNP/GP samples via `voxel_and_sims/sample_voxels.py`
+- Check the sampled sets via `plotting/plot_voxel_samples.py`
+- Run simulations via `submit_nersc.sh`
+- Inspect optical-step statistics via `inspect_sims/plot_optical_steps.py`
 
-- `numpy`
-- `scipy`
-- `pandas`
-- `matplotlib`
-- `pyg4ometry` (GDML profile parsing)
-- `geant4_pybind` (dead-volume checking)
+This repository uses [Pixi](https://pixi.sh/) to define a reproducible local environment for the voxel-generation and analysis workflow.
+This keeps the project dependencies isolated from the system Python and makes the workflow easier to reproduce across machines.The root `pixi.toml` sets up a workspace named `optmap_demo` and includes the main dependencies needed throughout the project. A GDML file is required for ULAr and dead-volume checks, for example `l1000.gdml` generated via `legend-pygeom-l1000`.
 
-A GDML file is required for ULAr and dead-volume checks, for example `l1000.gdml` generated via `legend-pygeom-l1000`.
+For large-scale production runs on NERSC Perlmutter, the repository also includes helper scripts to combine the Pixi environment with the locally built [momentum-enabled remage](https://github.com/Rashika-Gupta/remage-celeritas-int/commit/afa35e8dfcf44f575e7adc916e02b79499909994) installation:
+
+- `setup_remage_momentum.sh` updates `PATH` and `LD_LIBRARY_PATH` so that the local remage binaries are used instead of the default system one, and exports `REMAGE_CPP_PATH` for the Python wrapper
+- `submit_nersc.sh` creates a Slurm batch script that activates the standard Pixi environment, sources the local remage setup, and then distributes commands from a job list across a Slurm array.
+
+A typical submission looks like:
+
+```bash
+./submit_nersc.sh \
+  -j voxel_sets_x-800-600_y+50+250_z+400+600_5mm/jobs/lf/remage.txt \
+  -N 4 -c 1 -p 32 -t 02:00:00 \
+  -n box5mm_lf_remage
+```
+
+where `{...}/remage.txt` is a file containing one simulation command per line. The batch system distributes tasks across the requested array size. The script also supports `-D` to print the generated Slurm script without submitting.
+
 
 ## Workflow
 
@@ -127,8 +143,6 @@ Notes:
 - `--seed` changes which voxels are selected.
 - `--sim-seed` changes the per-voxel random simulation history while keeping the same voxel positions.
 
-### Shared helper: `voxel_and_sims/voxel_grid.py`
-
 The grid definition is centralized in `voxel_and_sims/voxel_grid.py`. This file defines:
 - detector-frame coordinate conventions,
 - voxel indexing and center/corner calculations,
@@ -152,7 +166,7 @@ This script is not meant to be copied or edited per user; it is the shared geome
 > [!NOTE]
 > For one campaign, keep both fixed. A new `--seed` gives a new voxel sample. A new `--sim-seed` gives the same voxels but different random photon histories.
 
-## Extension and rewrite behavior
+## Extension behavior
 
 Extending a campaign adds more voxels without changing the original fixed voxel choices.
 
@@ -222,12 +236,7 @@ This script:
 - counts optical-step entries per dataset,
 - plots a combined histogram for all datasets.
 
-This is useful for comparing the optical-step distributions across:
-- `LF_train`
-- `LF2_train`
-- `HF_train`
-- `CNP_val`
-- `GP_val`
+This is useful for comparing the optical-step distributions across `LF_train`, `LF2_train`, `HF_train`, `CNP_val`, `GP_val`.
 
 ### Photon absorption sanity check
 
@@ -235,34 +244,4 @@ This is useful for comparing the optical-step distributions across:
 python plotting/photon_absorption.py
 ```
 
-This helper contains a simple attenuation-length model and produces:
-- the survival fraction versus z,
-- the z positions where the survival drops to 10% and 1%.
-
-## Notes
-
-- The repo currently organizes scripts by stage (`voxel_and_sims/`, `plotting/`, `inspect_sims/`) rather than keeping everything at the project root.
-- Older usage examples should include the relevant subdirectory prefix when invoking scripts.
-- The generated campaign metadata (`config.json`, `manifest.json`) is important for reproducibility and safe extension.
-
-## Typical end-to-end use
-
-```bash
-# 1) build the grid / admissible voxel space
-python voxel_and_sims/make_voxel_space.py \
-  --vox 10 --xrange -957 957 --yrange -957 957 --zrange -1350 1500 \
-  --gdml l1000.gdml --dead-check --radius 957 \
-  --out voxel_20cmBox_10mm_21102026.csv.gz
-
-# 2) generate the LF/HF/CNP/GP samples
-python voxel_and_sims/sample_voxels.py voxel_20cmBox_10mm_21102026.csv.gz \
-  --outdir voxel_sets_x-800-600_y+50+250_z+400+600_5mm \
-  --n-lf 20 --n-lf2 20 --n-hf 4 --n-cnp-val 8 --n-gp-val 8 \
-  --prim-lf 500 --prim-hf 1000 --seed 12345 --sim-seed 12345
-
-# 3) check the sampled sets
-python plotting/plot_voxel_samples.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
-
-# 4) inspect optical-step statistics
-python inspect_sims/plot_optical_steps.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
-```
+This contains a simple attenuation-length model and produces the survival fraction versus z together with the z positions where the survival drops to 10% and 1%.
