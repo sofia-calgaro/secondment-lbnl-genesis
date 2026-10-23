@@ -81,24 +81,19 @@ python sample_voxels.py voxel_20cmBox_10mm_21102026.csv.gz
 - Outputs in `--outdir`: `voxels_*.csv`, `manifest.json`, `config.json`, `macros/`, `jobs/`, `events/lf2/`, `qc.png`, `qc_3d.png`.
 - `--scratch-dir` puts `results/`, `maps/`, `logs/` on scratch.
 
-#### Seed policy
+### Seed policy
 
-Short version:
+- `--seed` changes which voxels are selected -> seeds the random permutations that select the LF/LF2/HF/CNP/GP voxels and decides which LF2 voxels are shared with HF. It does not change the parity-based group assignment; that is fixed by the voxel indices, so the location groups remain disjoint for any seed.
+- `--sim-seed` changes the random numbers used inside each voxel simulation and in the LF2 source-event generation -> fixes the per-voxel simulation seed as `hash(sim-seed, tier, voxel_size, ix, iy, iz)`. The same voxel always gets the same seed, independent of counts or ordering. This is what makes simulations reproducible voxel by voxel.
 
-- `--seed` changes which voxels are selected.
-- `--sim-seed` changes the random numbers used inside each voxel simulation and in the LF2 source-event generation.
-
-`--seed` seeds the random permutations that select the LF/LF2/HF/CNP/GP voxels and decides which LF2 voxels are shared with HF. It does not change the parity-based group assignment; that is fixed by the voxel indices, so the location groups remain disjoint for any seed.
-
-`--sim-seed` fixes the per-voxel simulation seed as `hash(sim-seed, tier, voxel_size, ix, iy, iz)`. The same voxel always gets the same seed, independent of counts or ordering. This is what makes simulations reproducible voxel by voxel.
-
-For one campaign, keep both fixed. A new `--seed` gives a new voxel sample; a new `--sim-seed` gives the same voxels but different random photon histories.
+> [!NOTE]
+> For one campaign, keep both fixed. A new `--seed` gives a new voxel sample. A new `--sim-seed` gives the same voxels but different random photon histories.
 
 #### Extension and rewrite behavior
 
-Extending a campaign adds more voxels, not more primaries per voxel. The script checks the fixed sampling settings (`--seed`, `--sim-seed`, counts, box, voxel size, space SHA, and `--prim-*` values) and refuses to extend if any of these change.
+Extending a campaign adds more voxels, not more primaries per voxel. The script checks the fixed sampling settings (`--seed`, `--sim-seed`, counts, box, voxel size, space, and `--prim-*` values) and refuses to extend if any of these change.
 
-What gets rewritten and what does not:
+If we keep the same `--outdir`, `--seed`, `--sim-seed`, but LARGER COUNTS - what gets rewritten and what does not is:
 
 - Macros are rewritten in place for all voxels in the set. Old macros that are unchanged come out identical because position, seed, and primaries are the same.
 - Simulation outputs are not rewritten. Every job line starts with `test -s <output> || ...`, so completed `.stp.lh5` files are skipped.
@@ -107,13 +102,17 @@ What gets rewritten and what does not:
 
 HF is the important exception: HF selection depends on shared LF2 voxels and on the order of the HF list. If you change `--n-lf2` or `--n-hf`, the shared HF voxels and the run ordering can change, so some HF voxels may be simulated again under new names. This is not a physics change, but it does mean some older HF outputs become orphaned.
 
-For a new independent sample, use a new `--outdir` and a new `--seed`; keep `--sim-seed` fixed if you want the same voxel-level seeds for the matched voxel positions. For a new statistical realization of the same voxels, reuse the same `--seed` and use a new `--sim-seed`.
+> [!NOTE]
+> For a new independent sample, use a new `--outdir` and a new `--seed`. Keep `--sim-seed` fixed if you want the same voxel-level seeds for matched voxel positions (a voxel picked in both campaigns then has an identical photon history). For a new statistical realization of the same voxels, use a new `--outdir`, the same `--seed` and a new `--sim-seed`.
 
 > [!WARNING]
-> So far, no implementation for adding new sampled voxels to the ones previously generated, eg if we notice the first time we sampled the voxels and run the simulations we did not have enough statistics. The script only supports extending a campaign by increasing counts within the same fixed campaign.
+> You cannot increase statistics per voxel within one campaign: `--prim-lf` and `--prim-hf` are fixed in `config.json`. Raising them on an existing `--outdir` is rejected. For more photons per voxel, start a new campaign with a new `--outdir`; the script does not merge outputs from different campaigns.
 
 > [!WARNING]
-> So far, no implementation for enlarging the sampled box by extending the previous one and adding new sampled voxels. If done, it has to preserve the uniformity of sampled voxels on top of those already selected.
+> Extending a campaign is only partly supported. Increasing `--n-lf`, `--n-lf2`, `--n-cnp-val` or `--n-gp-val` keeps the earlier voxels and adds new ones. `HF_train` is the exception: changing `--n-hf` or `--n-lf2` changes which LF2 voxels HF shares and shifts the run numbers of the other HF voxels, so some HF voxels are simulated again under new names.
+
+> [!WARNING]
+> The sampling box cannot be enlarged on an existing campaign. The box limits and the space-file SHA256 are compared against the saved `config.json`, and a different box changes the whole random voxel order. A larger region needs a new `--outdir`, and a region beyond the step-1 box also needs a new space file.
 
 ### Helper: `voxel_grid.py`
 
