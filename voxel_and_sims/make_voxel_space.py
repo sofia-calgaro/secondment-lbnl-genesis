@@ -45,6 +45,8 @@ from voxel_grid import VoxelGrid, VoxelSpace
 
 warnings.filterwarnings("ignore")
 
+_C8 = np.array([[i, j, k] for i in (0, 1) for j in (0, 1) for k in (0, 1)], dtype=np.int64)
+
 
 # ----------------------------------------------------------------------------
 # Optional GDML-based checks (Geant4 navigator via geant4_pybind)
@@ -185,6 +187,23 @@ class GdmlLAr:
             else:
                 out[k] = True
                 self.dead_names.update(set(hit))
+        return out
+
+    def dead_corner_counts(self, idx, step=300_000):
+        """Number (0-8) of corners of every voxel inside dead volumes.
+        One navigator call per unique grid vertex, not per voxel corner."""
+        out = np.zeros(len(idx), np.uint8)
+        t0 = time.time()
+        for s in range(0, len(idx), step):
+            sub = np.asarray(idx[s:s + step], dtype=np.int64)
+            v = (sub[:, None, :] + _C8[None]).reshape(-1, 3)      # (8n, 3) vertex indices
+            uv, inv = np.unique(v, axis=0, return_inverse=True)
+            pts = uv * self.grid.size + self.inset
+            flag = np.fromiter((self.is_dead(self.locate(p)) is not None for p in pts),
+                               bool, len(pts))
+            out[s:s + step] = flag[inv.ravel()].reshape(-1, 8).sum(1)
+            print(f"  dead-corner count {min(s + step, len(idx)):,}/{len(idx):,}  "
+                  f"({time.time() - t0:.0f} s)", flush=True)
         return out
 
 
@@ -629,22 +648,42 @@ def main():
 
     # ---- 3. dead volumes (HPGe diodes, Cu rods) ----
     dead_meta = None
+    n_after_ular = len(idx)                    # voxels fully inside the ULAr boundary
     if a.dead_check:
-        isdead = np.zeros(len(idx), bool)
         sel = np.ones(len(idx), bool)
         if a.dead_bbox:
             b = np.array(a.dead_bbox).reshape(3, 2)
             cen = grid.centers(idx)
             sel = ((cen >= b[:, 0]) & (cen <= b[:, 1])).all(1)
             print(f"dead-volume check restricted to bbox: {int(sel.sum()):,} of {len(idx):,} voxels")
-        isdead[sel] = chunked(geo.voxel_dead, idx[sel], "dead-volume check")
+        ncorner = np.zeros(len(idx), np.uint8)
+        ncorner[sel] = geo.dead_corner_counts(idx[sel])
+        isdead = ncorner == 8
+        ispartial = (ncorner > 0) & (ncorner < 8)
+        n_dead, n_part = int(isdead.sum()), int(ispartial.sum())
+        n_live = int((ncorner == 0).sum())
+
+        pct = lambda n: f"{100 * n / max(n_after_ular, 1):6.2f}%"
+        print("\nVoxel statistics")
+        print(f"  initial selection                      {total:10,d}")
+        print(f"  outside the ULAr boundary (removed)    {total - n_after_ular:10,d}")
+        print(f"  fully inside the ULAr boundary         {n_after_ular:10,d}  (100%)")
+        print(f"    fully in dead mass (8/8, removed)    {n_dead:10,d}  {pct(n_dead)}")
+        print(f"    partially in dead mass (1-7/8, kept) {n_part:10,d}  {pct(n_part)}")
+        print(f"    no dead corner (0/8, kept)           {n_live:10,d}  {pct(n_live)}")
+
+        base = out[:-3] if out.endswith(".gz") else out
+        stem = os.path.splitext(base)[0]
         if isdead.any():
-            base = out[:-3] if out.endswith(".gz") else out
-            dead_path = os.path.splitext(base)[0] + "_dead_voxels.csv.gz"
-            np.savetxt(dead_path, idx[isdead], fmt="%d", delimiter=",", header="ix,iy,iz")
-            print("wrote", dead_path)
+            np.savetxt(stem + "_dead_voxels.csv.gz", idx[isdead], fmt="%d",
+                       delimiter=",", header="ix,iy,iz")
+            print("wrote", stem + "_dead_voxels.csv.gz")
+        if ispartial.any():
+            np.savetxt(stem + "_partial_voxels.csv.gz", idx[ispartial], fmt="%d",
+                       delimiter=",", header="ix,iy,iz")
+            print("wrote", stem + "_partial_voxels.csv.gz")
         dead_meta = {"gdml": os.path.abspath(a.gdml), "regex": a.dead_regex,
-                     "n_dead": int(isdead.sum())}
+                     "n_dead": n_dead, "n_partial": n_part, "n_no_dead_corner": n_live}
         idx = idx[~isdead]
 
     # ---- 4. strict "everything is LAr" check ----
