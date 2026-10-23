@@ -1,8 +1,8 @@
 # Voxels sampling and optical photon simulations
 
-Scripts to build a global voxel grid, remove voxels outside the ULAr volume or fully inside dead mass (HPGe diodes, Cu support rods), sample LF/HF training and validation voxels uniformly in (x, y, z), and write one remage macro + job per simulated voxel.
+Scripts to build a global voxel grid, remove voxels outside the ULAr volume or fully inside dead mass (HPGe diodes, Cu support rods), sample LF/HF training and validation voxels uniformly in (x, y, z), and generate macros / job lists for the simulations.
 
-Each simulated voxel returns a `.lh5` file (it inclused momenta in output after modifying [remage](https://remage.readthedocs.io/en/stable/)):
+Each simulated voxel returns a `.lh5` file (it included momenta in output after modifying [remage](https://remage.readthedocs.io/en/stable/)):
 
 ```
 sh-5.1$ ~/.local/bin/lh5ls --depth 2 /tmp/test_direction.stp.lh5
@@ -33,7 +33,7 @@ sh-5.1$ ~/.local/bin/lh5ls --depth 2 /tmp/test_direction.stp.lh5
 
 ## Requirements
 
-`numpy`, `scipy`, `pandas`, `matplotlib`, `pyg4ometry` (GDML profiles), `geant4_pybind` (dead-volume check). A GDML file (eg `l1000.gdml` generated via [legend-pygeom-l1000](https://github.com/legend-exp/legend-pygeom-l1000/tree/main)) is needed for step 1 and plotting the geometry.
+`numpy`, `scipy`, `pandas`, `matplotlib`, `pyg4ometry` (GDML profiles), `geant4_pybind` (dead-volume check). A GDML file (eg `l1000.gdml` generated via [legend-pygeom-l1000](https://github.com/leg[...]) is needed for the geometry-aware checks.
 
 ## Workflow
 
@@ -43,7 +43,7 @@ sh-5.1$ ~/.local/bin/lh5ls --depth 2 /tmp/test_direction.stp.lh5
 
 ### Step 1: `make_voxel_space.py`
 
-Builds all voxels of the grid inside a box, removes voxels not fully inside ULAr (analytic, from the GDML polycone) and voxels whose 8 corners are all in HPGe detectors and Cu supoort rods (Geant4 navigator).
+Builds all voxels of the grid inside a box, removes voxels not fully inside ULAr (analytic, from the GDML polycone) and voxels whose 8 corners are all in HPGe detectors and Cu supoort rods (Geant4-based dead-volume logic), and writes the shared voxel-space file.
 
 ```
 python make_voxel_space.py --vox 10 
@@ -81,11 +81,39 @@ python sample_voxels.py voxel_20cmBox_10mm_21102026.csv.gz
 - Outputs in `--outdir`: `voxels_*.csv`, `manifest.json`, `config.json`, `macros/`, `jobs/`, `events/lf2/`, `qc.png`, `qc_3d.png`.
 - `--scratch-dir` puts `results/`, `maps/`, `logs/` on scratch.
 
-> [!WARNING]
-> So far, no implementation for adding new sampled voxels to the ones previously generated, eg if we notice the first time we sampled the voxels and run the simulations we did not have enough statistics. If done, it has to preserve the uniformity of sampled voxels. 
+#### Seed policy
+
+Short version:
+
+- `--seed` changes which voxels are selected.
+- `--sim-seed` changes the random numbers used inside each voxel simulation and in the LF2 source-event generation.
+
+`--seed` seeds the random permutations that select the LF/LF2/HF/CNP/GP voxels and decides which LF2 voxels are shared with HF. It does not change the parity-based group assignment; that is fixed by the voxel indices, so the location groups remain disjoint for any seed.
+
+`--sim-seed` fixes the per-voxel simulation seed as `hash(sim-seed, tier, voxel_size, ix, iy, iz)`. The same voxel always gets the same seed, independent of counts or ordering. This is what makes simulations reproducible voxel by voxel.
+
+For one campaign, keep both fixed. A new `--seed` gives a new voxel sample; a new `--sim-seed` gives the same voxels but different random photon histories.
+
+#### Extension and rewrite behavior
+
+Extending a campaign adds more voxels, not more primaries per voxel. The script checks the fixed sampling settings (`--seed`, `--sim-seed`, counts, box, voxel size, space SHA, and `--prim-*` values) and refuses to extend if any of these change.
+
+What gets rewritten and what does not:
+
+- Macros are rewritten in place for all voxels in the set. Old macros that are unchanged come out identical because position, seed, and primaries are the same.
+- Simulation outputs are not rewritten. Every job line starts with `test -s <output> || ...`, so completed `.stp.lh5` files are skipped.
+- LF2 source events in `events/lf2/*.npz` are regenerated from deterministic seeds, so they remain identical.
+- Job lists and chunk files are rewritten, and new chunk boundaries can appear as counts grow; this is harmless because finished jobs are skipped.
+
+HF is the important exception: HF selection depends on shared LF2 voxels and on the order of the HF list. If you change `--n-lf2` or `--n-hf`, the shared HF voxels and the run ordering can change, so some HF voxels may be simulated again under new names. This is not a physics change, but it does mean some older HF outputs become orphaned.
+
+For a new independent sample, use a new `--outdir` and a new `--seed`; keep `--sim-seed` fixed if you want the same voxel-level seeds for the matched voxel positions. For a new statistical realization of the same voxels, reuse the same `--seed` and use a new `--sim-seed`.
 
 > [!WARNING]
-> So far, no implementation for enlarging the sampled box by extending the previous one and adding new sampled voxels. If done, it has to preserve the uniformity of sampled voxels on top of those present in the inner volume already sampled before.
+> So far, no implementation for adding new sampled voxels to the ones previously generated, eg if we notice the first time we sampled the voxels and run the simulations we did not have enough statistics. The script only supports extending a campaign by increasing counts within the same fixed campaign.
+
+> [!WARNING]
+> So far, no implementation for enlarging the sampled box by extending the previous one and adding new sampled voxels. If done, it has to preserve the uniformity of sampled voxels on top of those already selected.
 
 ### Helper: `voxel_grid.py`
 
@@ -114,7 +142,7 @@ python plot_voxel_samples.py voxel_sets_20cmBox_10mm_test
 ```
 
 
-- `plot_voxel_samples.py`: plots all five sets (2D/3D, occupancy, coverage), writes `overlap_audit.txt` and, if found, `removal_summary.txt` with why voxels were removed. Output in `<sample_dir>/plots`.
+- `plot_voxel_samples.py`: plots all five sets (2D/3D, occupancy, coverage), writes `overlap_audit.txt` and, if found, `removal_summary.txt` with why voxels were removed. Output in `<sample_dir>/...`.
 
 ### Geometry (GDML only)
 
@@ -126,3 +154,4 @@ python voxel_borehole.py
 
 - `uar_and_ge.py`: 2D/3D scene of the ULAr re-entrant tube (cut at z=1500 mm), the HPGe detectors (336 in 42 strings) and Cu support rods. Reads `l1000.gdml` from the working directory.
 - `voxel_borehole.py`: sketch of a V00101Z-like detector with a voxel that survives the 8-corner rule but partly overlaps Ge next to the borehole.
+
