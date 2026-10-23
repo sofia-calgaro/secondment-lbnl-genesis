@@ -167,18 +167,27 @@ class VoxelSource:
 GROUPS = ("lf1", "lf2", "hfextra", "val")  # mutually exclusive location groups
 LF_GROUPS = ("lf1", "lf2")                 # these get the core/outer thinning
 
-
+"""
 def voxel_group(grid, seed, v):
-    """Spatially interleave four mutually exclusive groups at voxel scale.
-
-    The parity pattern repeats in all three coordinates: adjacent voxels are distributed
-    among groups instead of assigning groups through a random hash (which can leave visible
-    spatial clumps). The seed is intentionally not used for ownership: changing the selection
-    seed changes the uniform random ordering, not which spatial regions are eligible for a group.
-    """
+    #Spatially interleave four mutually exclusive groups at voxel scale.
+    #
+    #The parity pattern repeats in all three coordinates: adjacent voxels are distributed
+    #among groups instead of assigning groups through a random hash (which can leave visible
+    #spatial clumps). The seed is intentionally not used for ownership: changing the selection
+    #seed changes the uniform random ordering, not which spatial regions are eligible for a group.
+    #
     ix, iy, iz = (int(x) for x in v)
     g = (ix % 2 + 2 * (iy % 2) + iz % 2) % len(GROUPS)
     return GROUPS[g]
+"""
+def voxel_group(grid, seed, v):
+    """Deterministically assign each voxel to one of four interleaved groups."""
+    ix, iy, iz = (int(x) for x in v)
+    payload = f"{seed}|{ix}|{iy}|{iz}".encode("utf-8")
+    value = int.from_bytes(
+        hashlib.sha256(payload).digest()[:8], "big"
+    )
+    return GROUPS[value % len(GROUPS)]
 
 
 def make_sets(grid, counts, ratio, seed):
