@@ -245,3 +245,5 @@ python plotting/photon_absorption.py
 ```
 
 This contains a simple attenuation-length model and produces the survival fraction versus z together with the z positions where the survival drops to 10% and 1%.
+
+🤖 AI tools (Claude Code and GitHub Copilot) were used to assist in generating portions of the scripts. All AI-assisted code was carefully reviewed and validated before being incorporated into the repository.
