@@ -7,7 +7,7 @@ This repository contains tools to:
 - generate remage macros and job lists,
 - inspect simulation outputs and optical-step statistics.
 
-Each simulated voxel produces a `.lh5` output file. After the remage modification used here, the files include photon momentum information and the optical step records needed for downstream analysis.
+Each simulated voxel produces a `.lh5` output file. After the remage modification ([commit](https://github.com/Rashika-Gupta/remage-celeritas-int/commit/afa35e8dfcf44f575e7adc916e02b79499909994 )), the files include photon momentum information and the optical step records needed for the analysis.
 
 Example structure of a generated `.lh5` file:
 
@@ -37,23 +37,6 @@ sh-5.1$ ~/.local/bin/lh5ls --depth 2 /tmp/test_direction.stp.lh5
 └── zloc · array<1>{real}
 ```
 
-## Repository layout
-
-- `voxel_and_sims/`
-  - `make_voxel_space.py` — defines the admissible voxel space
-  - `sample_voxels.py` — samples LF/HF train and validation voxels
-  - `voxel_grid.py` — shared grid definition + `VoxelSpace` format
-- `plotting/`
-  - `check_dead_voxels.py` — dead-voxel / ULAr validation plots
-  - `plot_voxel_samples.py` — sample-set diagnostics and overlap audit
-  - `uar_and_ge.py` — GDML-based ULAr / detector visualization
-  - `voxel_borehole.py` — sketch of a detector-borehole overlap case
-  - `photon_absorption.py` — simple attenuation model helper
-- `inspect_sims/`
-  - `plot_optical_steps.py` — optical-step analysis across datasets
-- root files
-  - `README.md`
-
 ## Requirements
 
 Python packages used by the scripts:
@@ -70,8 +53,8 @@ A GDML file is required for ULAr and dead-volume checks, for example `l1000.gdml
 ## Workflow
 
 1. **Step 1:** build the voxel space with `voxel_and_sims/make_voxel_space.py`
-2. **Step 2:** sample the datasets with `voxel_and_sims/sample_voxels.py`
-3. **Validation / inspection:** run the plotting and inspection utilities in `plotting/` and `inspect_sims/`
+2. **Step 2:** sample the datasets in the defined grid volume generated above with `voxel_and_sims/sample_voxels.py`
+3. Run the plotting/inspection utilities in `plotting/` and `inspect_sims/`
 
 ### Step 1: `voxel_and_sims/make_voxel_space.py`
 
@@ -83,17 +66,16 @@ This script builds the full voxel grid inside a selected box, removes voxels:
 Example:
 
 ```bash
-python voxel_and_sims/make_voxel_space.py --vox 10 \
-  --xrange -957 957 --yrange -957 957 --zrange -1350 1500 \
-  --gdml l1000.gdml --dead-check --radius 957 \
-  --dead-bbox -850 850 -850 850 -1000 800 \
-  --out voxel_20cmBox_10mm_21102026.csv.gz
+pixi run python secondment-lbnl-genesis/voxel_and_sims/make_voxel_space.py \
+  --vox 5 --xrange -957 957 --yrange -957 957 --zrange -1350 1500 \
+  --gdml l1000.gdml --dead-check --dead-bbox -850 850 -850 850 -1000 1500 \
+  --out dead_mass_z1500mm_5mm.csv.gz --radius 957 --max-voxels 300000000
 ```
 
 Important notes:
 - `--dead-bbox` limits the expensive dead-volume check to a smaller box.
 - Output files are written with the same prefix as `--out`:
-  - `<out>` — voxel-space file
+  - `<out>` - voxel-space file
   - `<out stem>_qc.pdf`
   - `<out stem>_dead_voxels.csv.gz`
   - `<out stem>_partial_voxels.csv.gz`
@@ -111,10 +93,24 @@ This script samples five datasets from the saved voxel-space file:
 Example:
 
 ```bash
-python voxel_and_sims/sample_voxels.py voxel_20cmBox_10mm_21102026.csv.gz \
-  --outdir voxel_sets_20cmBox_10mm_test \
-  --n-lf 20 --n-lf2 20 --n-hf 4 --n-cnp-val 8 --n-gp-val 8 \
-  --prim-lf 500 --prim-hf 1000 --seed 12345 --sim-seed 12345
+pixi run python sample_voxels.py dead_mass_z1500mm_5mm.csv.gz \
+  --outdir voxel_sets_x-800-600_y+50+250_z+400+600_5mm \
+  --xrange -800 -600 --yrange 50 250 --zrange 400 600 \
+  --n-lf 6400 --n-lf2 6400 --n-hf 640 --n-cnp-val 500 --n-gp-val 500 \
+  --prim-lf 1500 --prim-hf 5000 --seed 12345 --sim-seed 12345 \
+  --gdml l1000.gdml --hf-overlap-lf2 0.5 \
+  --scratch-dir /pscratch/sd/s/sofiacal/optmap/
+  --map-settings map_setting_20cmBox_x-800-600_y50+250_z+400+600_5mm.yaml
+```
+
+where `map_setting_20cmBox_x-800-600_y50+250_z+400+600_5mm.yaml` is
+
+```yaml
+range_in_m:
+  - [-0.8, -0.6] # see above
+  - [0.05, 0.25] # see above
+  - [0.4, 0.6] # see above
+bins: [40, 40, 40] # 5mm edge
 ```
 
 The script:
@@ -122,7 +118,7 @@ The script:
 - creates job lists / chunk files,
 - writes a manifest describing each set,
 - saves `events/lf2/*.npz` for LF2 source-event generation,
-- writes QC figures (`qc.png`, `qc_3d.png`).
+- generates plots with voxel distributed for each dataset in 2 (`qc.png`, `qc_3d.png`).
 
 Notes:
 - `--outdir` must be a new directory name, not the space-file name.
@@ -192,7 +188,7 @@ This script:
 ### Sample-set validation
 
 ```bash
-python plotting/plot_voxel_samples.py voxel_sets_20cmBox_10mm_test
+python plotting/plot_voxel_samples.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
 ```
 
 This script:
@@ -209,8 +205,7 @@ python plotting/voxel_borehole.py
 ```
 
 These scripts visualize:
-- the ULAr re-entrant tube,
-- HPGe detector strings and support rods,
+- the ULAr re-entrant tube, HPGe detector strings and support rods; add `--box -800 -600 50 250 400 600` if you want to visualize a volume with coordinates -800 < x < -600 mm, 50 < y < 250 mm, 400 < z < 600 mm.
 - a voxel near a borehole that passes the coarse 8-corner rule but still overlaps dead material.
 
 ## Post-simulation inspection
@@ -218,7 +213,7 @@ These scripts visualize:
 ### Optical-step summary
 
 ```bash
-python inspect_sims/plot_optical_steps.py voxel_sets_20cmBox_10mm_test
+python inspect_sims/plot_optical_steps.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
 ```
 
 This script:
@@ -261,13 +256,13 @@ python voxel_and_sims/make_voxel_space.py \
 
 # 2) generate the LF/HF/CNP/GP samples
 python voxel_and_sims/sample_voxels.py voxel_20cmBox_10mm_21102026.csv.gz \
-  --outdir voxel_sets_20cmBox_10mm_test \
+  --outdir voxel_sets_x-800-600_y+50+250_z+400+600_5mm \
   --n-lf 20 --n-lf2 20 --n-hf 4 --n-cnp-val 8 --n-gp-val 8 \
   --prim-lf 500 --prim-hf 1000 --seed 12345 --sim-seed 12345
 
 # 3) check the sampled sets
-python plotting/plot_voxel_samples.py voxel_sets_20cmBox_10mm_test
+python plotting/plot_voxel_samples.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
 
 # 4) inspect optical-step statistics
-python inspect_sims/plot_optical_steps.py voxel_sets_20cmBox_10mm_test
+python inspect_sims/plot_optical_steps.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
 ```
