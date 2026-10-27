@@ -341,7 +341,7 @@ def make_rows(idx, kind, prefix, grid, nprim, ratio, sim_seed, partner=None):
 RUN_WIDTH = 5          # run00001: fixed width, so names never change when the counts grow
 VAL_RUN_OFFSET = 10000  # validation runs are numbered 10001, 10002, ... (training: 1, 2, ...)
 TIER = {"LF_train": "lf", "CNP_val": "lf", "HF_train": "hf", "GP_val": "hf",
-        "LF2_train": None}   # None: not simulated, so no files
+        "LF2_train": "lf"}   # !!! use 'None' if not simulated
 
 
 
@@ -444,14 +444,37 @@ def setup_dirs(outdir, scratch):
                 os.makedirs(os.path.join(link, t), exist_ok=True)
 
 
+"""
 def write_csv(path, rows):
-    cols = list(rows[0].keys())
+    #cols = list(rows[0].keys())
+    cols = list(dict.fromkeys(k for row in rows for k in row.keys()))
     with open(path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for r in rows:
             w.writerow({c: (f"{r[c]:.4f}" if isinstance(r[c], float) else r[c]) for c in cols})
+"""
+def write_csv(path, rows):
+    if not rows:
+        return
 
+    # Include every column used by any row, preserving column order.
+    cols = list(dict.fromkeys(
+        key for row in rows for key in row.keys()
+    ))
+
+    with open(path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=cols)
+        w.writeheader()
+        for r in rows:
+            w.writerow({
+                c: (
+                    f"{r[c]:.4f}"
+                    if isinstance(r.get(c), float)
+                    else r.get(c, "")
+                )
+                for c in cols
+            })
 
 # ----------------------------------------------------------------------------
 # QC plots
@@ -745,7 +768,7 @@ def main():
     lf_idx = S["lf1"]
     lf_rows = make_rows(lf_idx, "LF_train", "LFT", grid, a.prim_lf, a.ratio, a.sim_seed)
     lf_core = np.array([r["zone"] == "core" for r in lf_rows])
-    # Training step 2, LF: other voxels, locations only (no simulation)
+    # Training step 2, LF: other voxels, locations only (no simulation - or simulated during tests)
     lf2_idx = S["lf2"]
     lf2_rows = make_rows(lf2_idx, "LF2_train", "LF2", grid, a.prim_lf, a.ratio, a.sim_seed)
     # Training step 2, HF: exact requested overlap with LF2_train only. Remaining HF
@@ -806,9 +829,9 @@ def main():
                                    "simulate": True}},
         "training_step_2": {
             "LF": {"set": "LF2_train", "file": "voxels_LF2_train.csv", "n_voxels": len(lf2_rows),
-                   "photons": a.prim_lf, "simulate": False,
-                   "note": "no Geant4 transport simulation; event-level positions and photon momenta are "
-                           "sampled and saved as compressed NPZ files in events/lf2/"},
+                   #"photons": a.prim_lf, "simulate": False, # when not wanting to simulate the full chain (not implemented)
+                   "primaries": a.prim_lf, "simulate": True,
+                   "note": "in the future, no Geant4 transport simulation"},
             "HF": {"set": "HF_train", "file": "voxels_HF_train.csv", "n_voxels": len(hf_rows),
                    "primaries": a.prim_hf, "simulate": True,
                    "overlap_with_LF_train": 0,
