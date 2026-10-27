@@ -84,7 +84,7 @@ Example:
 ```bash
 pixi run python secondment-lbnl-genesis/voxel_and_sims/make_voxel_space.py \
   --vox 5 --xrange -957 957 --yrange -957 957 --zrange -1350 1500 \
-  --gdml l1000.gdml --dead-check --dead-bbox -850 850 -850 850 -1000 1500 \
+  --gdml /dvs_ro/cfs/cdirs/m2676/users/calgaro/uzh/secondment/optmap_demo/l1000.gdm --dead-check --dead-bbox -850 850 -850 850 -1000 1500 \
   --out dead_mass_z1500mm_5mm.csv.gz --radius 957 --max-voxels 300000000
 ```
 
@@ -114,8 +114,8 @@ pixi run python sample_voxels.py dead_mass_z1500mm_5mm.csv.gz \
   --xrange -800 -600 --yrange 50 250 --zrange 400 600 \
   --n-lf 6400 --n-lf2 6400 --n-hf 640 --n-cnp-val 500 --n-gp-val 500 \
   --prim-lf 1500 --prim-hf 5000 --seed 12345 --sim-seed 12345 \
-  --gdml l1000.gdml --hf-overlap-lf2 0.5 \
-  --scratch-dir /pscratch/sd/s/sofiacal/optmap/
+  --gdml /dvs_ro/cfs/cdirs/m2676/users/calgaro/uzh/secondment/optmap_demo/l1000.gdml --hf-overlap-lf2 0.5 \
+  --scratch-dir /pscratch/sd/s/sofiacal/optmap/ \ 
   --map-settings map_setting_20cmBox_x-800-600_y50+250_z+400+600_5mm.yaml
 ```
 
@@ -188,7 +188,7 @@ Important caveat:
 
 ```bash
 python plotting/check_dead_voxels.py voxel_20cmBox_10mm_21102026.csv.gz \
-  --gdml l1000.gdml --vox 10 \
+  --gdml /dvs_ro/cfs/cdirs/m2676/users/calgaro/uzh/secondment/optmap_demo/l1000.gdml --vox 10 \
   --dead voxel_20cmBox_10mm_21102026_dead_voxels.csv.gz \
   --zcut 1500
 ```
