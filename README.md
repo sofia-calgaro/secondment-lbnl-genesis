@@ -97,6 +97,11 @@ Important notes:
   - `<out stem>_partial_voxels.csv.gz`
   - additional removal metadata / summary files
 
+For dead-mass rejection, the code uses the 8-corner rule: keep the voxel if at least one corner remains inside the ULAr volume; remove the voxel if all 8 corners fall in dead material / support structure (being more conservative by reducing the voxel edge by 0.05 mm per side)
+
+<img src="https://github.com/user-attachments/assets/a39055ad-4e02-457b-8775-b0f123a0e7c0" alt="Voxel selection rule" width="400" style="max-width:100%; height:auto;">
+
+
 ### Step 2: `voxel_and_sims/sample_voxels.py`
 
 This script samples five datasets from the saved voxel-space file:
@@ -224,19 +229,26 @@ These scripts visualize:
 
 ## Post-simulation inspection
 
-### Optical-step summary
+### Optical-step summary & diagnostic plots
 
 ```bash
 python inspect_sims/plot_optical_steps.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
 ```
 
-This script:
-- reads the voxel manifests and available simulation outputs,
-- matches files to their coordinate tags,
-- counts optical-step entries per dataset,
-- plots a combined histogram for all datasets.
+This script inspects the simulation output files and summarizes how many optical hits each voxel gets. It reads the LH5 files, matches them to the voxel manifests, counts distinct SiPM channels, repeated hits, and primaries producing optical signals, then produces plots and summary CSVs across all datasets.
 
-This is useful for comparing the optical-step distributions across `LF_train`, `LF2_train`, `HF_train`, `CNP_val`, `GP_val`.
+The output includes optical-step histograms, coverage maps, repeated-hit statistics, and primary-hit-vs-position diagnostics, which helps compare dataset performance and identify voxels with unusually low or high light yield.
+
+
+### Simulation timing summary
+
+```bash
+python inspect_sims/timing.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
+```
+
+This script checks the timing logs from the voxel simulations and matches them back to the voxel manifests by run ID or coordinate tag. 
+It reads the remage log files, extracts per-voxel timing metrics such as average event processing time, throughput, and vertex-sampling time.
+It is useful for validating that the expected number of jobs ran, identifying missing/incomplete voxels, and comparing timing distributions across `LF_train`, `LF2_train`, `HF_train`, `CNP_val`, `GP_val`.
 
 ### Photon absorption sanity check
 
@@ -245,5 +257,13 @@ python plotting/photon_absorption.py
 ```
 
 This contains a simple attenuation-length model and produces the survival fraction versus z together with the z positions where the survival drops to 10% and 1%.
+
+### Check of existing simulations vs jobs
+
+```bash
+python inspect_sims/check_number_of_sims.py voxel_sets_x-800-600_y+50+250_z+400+600_5mm
+```
+
+Summary of existing and missing simulations after a comparison with the list of jobs.
 
 🤖 AI tools (Claude Code and GitHub Copilot) were used to assist in generating portions of the scripts. All AI-assisted code was carefully reviewed and validated before being incorporated into the repository.
