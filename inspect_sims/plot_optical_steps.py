@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.ticker import MaxNLocator
+from scipy.spatial import cKDTree
 
 
 # ============================================================
@@ -31,7 +32,10 @@ LABEL_BARS_UNDER = 20
 BARS_BELOW = 150          # <= this many files: individual bars; above: step area
 PROGRESS_EVERY = 1000
 MAX_ERRORS_PRINTED = 10
-
+PRIMARY_COUNTS = {
+    "lf": 1500,
+    "hf": 5000,
+}
 DATASETS = [
     "LF_train",
     "LF2_train",
@@ -114,7 +118,7 @@ def load_manifests(folder):
     manifest_rows = {}
 
     for dataset in DATASETS:
-        manifest = os.path.join(folder, "hits_distributions", f"voxels_{dataset}.csv")
+        manifest = os.path.join(folder, f"voxels_{dataset}.csv")
 
         if not os.path.isfile(manifest):
             raise FileNotFoundError(f"Manifest not found: {manifest}")
@@ -220,16 +224,30 @@ def scan_results(folder, tag_to_datasets):
 
             try:
                 with h5py.File(filename, "r") as f:
-                    n_evtid = len(f["stp/optical/evtid"])
+                    evtid = f["stp/optical/evtid"][:]
                     det_uid = f["stp/optical/det_uid"][:]
-
-                if n_evtid != len(det_uid):
+                
+                if len(evtid) != len(det_uid):
                     raise ValueError(
-                        f"evtid length ({n_evtid}) differs from "
+                        f"evtid length ({len(evtid)}) differs from "
                         f"det_uid length ({len(det_uid)})"
                     )
-
+                
                 n_hits = len(det_uid)
+                
+                # Each unique event ID represents a primary event that produced
+                # at least one recorded optical hit.
+                n_primaries = PRIMARY_COUNTS[fidelity]
+                n_primaries_with_hits = int(np.unique(evtid).size)
+                
+                if n_primaries_with_hits > n_primaries:
+                    raise ValueError(
+                        f"{filename}: found {n_primaries_with_hits} distinct hit events, "
+                        f"but only {n_primaries} primaries are expected"
+                    )
+                
+                n_primaries_without_hits = n_primaries - n_primaries_with_hits
+
                 _, per_channel = np.unique(det_uid, return_counts=True)
                 n_channels = len(per_channel)
                 n_single = int(np.count_nonzero(per_channel == 1))
@@ -248,6 +266,12 @@ def scan_results(folder, tag_to_datasets):
                     "n_channels": n_channels,
                     "n_single": n_single,
                     "n_repeated": n_repeated,
+                    "n_primaries": n_primaries,
+                    "n_primaries_with_hits": n_primaries_with_hits,
+                    "n_primaries_without_hits": n_primaries_without_hits,
+                    "pct_primaries_with_hits": (
+                        100.0 * n_primaries_with_hits / n_primaries
+                    ),
                 }
 
                 # Shared voxels contribute to every matching dataset.
@@ -280,8 +304,12 @@ def scan_results(folder, tag_to_datasets):
               f"{excluded[dataset]} ignored")
 
     frames = {}
-    columns = ["filename", "tag", "x_mm", "y_mm", "z_mm", "fidelity",
-               "n_hits", "n_channels", "n_single", "n_repeated"]
+    columns = [
+        "filename", "tag", "x_mm", "y_mm", "z_mm", "fidelity",
+        "n_hits", "n_channels", "n_single", "n_repeated",
+        "n_primaries", "n_primaries_with_hits",
+        "n_primaries_without_hits", "pct_primaries_with_hits",
+    ]
     for dataset in DATASETS:
         df = pd.DataFrame(records[dataset], columns=columns)
         df["has_repeated"] = df["n_repeated"] > 0
@@ -411,7 +439,9 @@ def save_summary_csv(folder, frames):
             "max_channels": int(df["n_channels"].max()) if n_files else 0,
         })
 
-    path = os.path.join(folder, "hits_distributions", "coverage_summary.csv")
+    outdir = Path(folder).resolve() / "hits_distributions"
+    outdir.mkdir(parents=True, exist_ok=True)
+    path = outdir / "coverage_summary.csv"
     pd.DataFrame(rows).to_csv(path, index=False, float_format="%.3f")
     print(f"\nSaved: {path}")
 
@@ -938,6 +968,300 @@ def plot_distinct_channels(folder, frames, log_y=False):
     return fig
 
 
+
+# ============================================================
+# PLOT 5: NEAREST-NEIGHBOUR DISTANCES BETWEEN SAMPLED VOXELS
+# ============================================================
+
+
+def plot_nearest_neighbor_distances(folder, manifest_info):
+    """
+    Calculate each voxel's 3D distance to its nearest other sampled voxel.
+
+    Uses voxel coordinates in the manifests. Coordinates are deduplicated
+    within each dataset and in the combined set.
+    """
+    coordinates = {}
+
+    for dataset in DATASETS:
+        tags = manifest_info["tags"].get(dataset, set())
+        coords = np.asarray(
+            [coords_mm_from_tag(tag) for tag in sorted(tags)],
+            dtype=float,
+        )
+        if len(coords):
+            coords = coords[np.isfinite(coords).all(axis=1)]
+            coords = np.unique(coords, axis=0)
+        coordinates[dataset] = coords
+
+    all_coords = [
+        coords for coords in coordinates.values() if len(coords)
+    ]
+    combined = (
+        np.unique(np.vstack(all_coords), axis=0)
+        if all_coords else np.empty((0, 3), dtype=float)
+    )
+
+    groups = {dataset: coordinates[dataset] for dataset in DATASETS}
+    groups["All datasets"] = combined
+
+    distance_values = {}
+    summary_rows = []
+
+    for label, coords in groups.items():
+        if len(coords) < 2:
+            distances = np.array([], dtype=float)
+            print(
+                f"{label}: fewer than 2 unique voxels; "
+                "cannot calculate nearest-neighbour distances."
+            )
+        else:
+            # k=2: first neighbour is the voxel itself; second is the
+            # nearest other voxel.
+            distances = cKDTree(coords).query(coords, k=2)[0][:, 1]
+            print(
+                f"{label}: N={len(coords)}, "
+                f"mean nearest-neighbour distance={distances.mean():.2f} mm, "
+                f"median={np.median(distances):.2f} mm"
+            )
+
+        distance_values[label] = distances
+        summary_rows.append({
+            "dataset": label,
+            "n_unique_voxels": len(coords),
+            "mean_nearest_neighbor_distance_mm":
+                float(distances.mean()) if len(distances) else np.nan,
+            "median_nearest_neighbor_distance_mm":
+                float(np.median(distances)) if len(distances) else np.nan,
+            "min_nearest_neighbor_distance_mm":
+                float(distances.min()) if len(distances) else np.nan,
+            "max_nearest_neighbor_distance_mm":
+                float(distances.max()) if len(distances) else np.nan,
+        })
+
+    outdir = Path(folder).resolve() / "hits_distributions"
+    outdir.mkdir(parents=True, exist_ok=True)
+    csv_path = outdir / "nearest_neighbor_distances_summary.csv"
+    pd.DataFrame(summary_rows).to_csv(
+        csv_path, index=False, float_format="%.3f"
+    )
+    print(f"Saved: {csv_path}")
+
+    labels = list(groups.keys())
+    fig, ax = plt.subplots(figsize=(11, 6))
+    rng = np.random.default_rng(12345)
+
+    for xpos, label in enumerate(labels):
+        distances = distance_values[label]
+        if not len(distances):
+            continue
+
+        jitter = rng.uniform(-0.18, 0.18, size=len(distances))
+        ax.scatter(
+            xpos + jitter,
+            distances,
+            s=12,color='dodgerblue',
+            alpha=0.35,
+            edgecolors="none",
+        )
+        ax.scatter(
+            xpos,
+            distances.mean(),
+            marker="D",
+            s=55,
+            edgecolors="none", color='rebeccapurple',
+            linewidths=0.7,
+            zorder=4,
+        )
+
+    tick_labels = [
+        f"{label} (N={len(groups[label])})"
+        for label in labels
+    ]
+    ax.set_xticks(range(len(labels)))
+    ax.set_xticklabels(tick_labels, rotation=20, ha="right")
+    ax.set_ylabel("Euclidean distance to nearest other voxel (mm)")
+    ax.grid(axis="y", alpha=0.25)
+    ax.set_axisbelow(True)
+    ax.scatter([],[], s=12,
+            alpha=0.35,
+            edgecolors="none",label="Individual voxels",color='dodgerblue')
+    ax.scatter([],[], 
+            marker="D",
+            s=55,
+            edgecolors="none",
+            linewidths=0.7,
+            color='rebeccapurple',
+            label="Dataset mean")
+    ax.legend(loc='upper right')
+    fig.tight_layout()
+    save_figure(fig, folder, "nearest_neighbor_distances")
+    return fig
+
+# ============================================================
+# PLOT 6: PRIMARIES WITH AND WITHOUT OPTICAL HITS
+# ============================================================
+
+def plot_primary_hit_statistics(folder, frames):
+    """
+    Show the number of primaries with and without optical hits.
+
+    Each simulation file represents one voxel. The plot shows the
+    mean number of primaries per voxel that produced at least one
+    optical hit, and those that produced none, for each dataset.
+
+    LF simulations use 1500 primaries; HF simulations use 5000.
+    """
+    groups = get_groups(frames)
+
+    if not groups:
+        print("No data available for primary-hit statistics.")
+        return None
+
+    labels = []
+    means_with_hits = []
+    means_without_hits = []
+    percentages_with_hits = []
+
+    for label, df in groups:
+        labels.append(label)
+
+        means_with_hits.append(
+            df["n_primaries_with_hits"].mean()
+        )
+        means_without_hits.append(
+            df["n_primaries_without_hits"].mean()
+        )
+        percentages_with_hits.append(
+            df["pct_primaries_with_hits"].mean()
+        )
+
+        print(
+            f"{label}: mean primaries with hits = "
+            f"{df['n_primaries_with_hits'].mean():.1f}/"
+            f"{df['n_primaries'].iloc[0]:.0f} "
+            f"({df['pct_primaries_with_hits'].mean():.2f}%), "
+            f"mean primaries without hits = "
+            f"{df['n_primaries_without_hits'].mean():.1f}"
+        )
+
+    x = np.arange(len(labels))
+    fig, axes = plt.subplots(
+        2, 1,
+        figsize=(max(10, 0.9 * len(labels)), 8),
+        layout="constrained",
+    )
+
+    # Top: stacked counts, averaged per simulated voxel.
+    axes[0].bar(
+        x, means_with_hits,
+        label="At least one optical hit",
+        color="steelblue",
+    )
+    axes[0].bar(
+        x, means_without_hits,
+        bottom=means_with_hits,
+        label="No optical hits",
+        color="lightgray",
+    )
+
+    axes[0].set_ylabel("Mean number of primaries per voxel")
+    axes[0].set_title("Primary events with and without optical hits")
+    axes[0].set_xticks(x)
+    axes[0].set_yscale("log")
+    axes[0].set_xticklabels(labels, rotation=30, ha="right")
+    axes[0].grid(axis="y", alpha=0.25)
+    axes[0].set_axisbelow(True)
+    axes[0].legend()
+
+    # Bottom: fraction of primaries producing at least one hit.
+    bars = axes[1].bar(
+        x, percentages_with_hits,
+        color="steelblue",
+    )
+
+    axes[1].set_ylabel("Primaries with hits (%)")
+    axes[1].set_ylim(
+        0,
+        min(100, max(percentages_with_hits, default=0) * 1.2 + 1),
+    )
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, rotation=30, ha="right")
+    axes[1].grid(axis="y", alpha=0.25)
+    axes[1].set_axisbelow(True)
+
+    for bar, pct in zip(bars, percentages_with_hits):
+        axes[1].annotate(
+            f"{pct:.1f}%",
+            (bar.get_x() + bar.get_width() / 2, bar.get_height()),
+            xytext=(0, 3),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+    save_figure(fig, folder, "primary_hit_statistics")
+    return fig
+
+def plot_primary_hit_vs_z(folder, frames, n_slices=5):
+    """
+    Show the fraction of primaries producing at least one optical hit
+    as a function of the Z coordinate.
+
+    The Z axis is divided into `n_slices` equal-width bins. For each bin,
+    the mean hit percentage across all voxels in that slice is plotted.
+    """
+    groups = get_groups(frames)
+
+    if not groups:
+        print("No data available for primary-hit statistics.")
+        return None
+
+    fig, ax = plt.subplots(figsize=(7, 4), layout="constrained")
+    
+    for i, (label, df) in enumerate(groups):
+        if df["z_mm"].isna().all():
+            continue
+            
+        z_min = df["z_mm"].min()
+        z_max = df["z_mm"].max()
+        bin_edges = np.linspace(z_min, z_max, n_slices + 1)
+        
+        # Digitize assigns each row to a bin (1 to n_slices)
+        # We use np.clip to ensure the maximum value falls into the last bin
+        bin_indices = np.clip(np.digitize(df["z_mm"], bin_edges) - 1, 0, n_slices - 1)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        mean_pcts = []
+        
+        for b in range(n_slices):
+            slice_df = df[bin_indices == b]
+            if len(slice_df) > 0:
+                mean_pcts.append(slice_df["pct_primaries_with_hits"].mean())
+            else:
+                mean_pcts.append(np.nan) # Handle empty bins if the grid is sparse
+
+        ax.plot(
+            bin_centers, 
+            mean_pcts, 
+            marker='o', 
+            linestyle='-', 
+            label=f"{label} (N={len(df)})",
+            linewidth=0
+        )
+        
+        print(f"\n--- {label} Z-slice hit percentages ---")
+        for center, pct in zip(bin_centers, mean_pcts):
+            print(f"  Z = {center:7.1f} mm : {pct:.3f}%")
+
+    ax.set_xlabel("z position (mm)")
+    ax.set_ylabel("Mean primaries with hits (%)")
+    ax.set_axisbelow(True)
+    ax.legend(loc="best")
+    
+    save_figure(fig, folder, "primary_hits_vs_z")
+    return fig
 # ============================================================
 # MAIN
 # ============================================================
@@ -974,12 +1298,15 @@ def main():
     print_repeated_hit_stats(frames)
     print_single_hit_stats(frames)
     save_summary_csv(folder, frames)
+    plot_nearest_neighbor_distances(folder, manifest_info)
 
     make_plot(folder, optical_steps)
     plot_coverage_vs_position(folder, frames)
     plot_coverage_maps(folder, frames, metric="channels")
     plot_coverage_maps(folder, frames, metric="no_hits")
     plot_distinct_channels(folder, frames, log_y=args.log_y)
+    plot_primary_hit_statistics(folder, frames)
+    plot_primary_hit_vs_z(folder, frames, n_slices=5)
     if args.per_file:
         plot_channel_coverage(folder, frames,
                               start=args.coverage_start,

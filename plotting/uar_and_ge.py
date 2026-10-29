@@ -219,7 +219,7 @@ if BOX is not None:                                   # optional box: x-z projec
 ax.set_xlabel("x [mm]"); ax.set_ylabel("z [mm]")
 ax.set_aspect("equal"); ax.autoscale_view()
 ax.set_title(f"liquid_argon_underground (z ≤ {ZCUT:.0f} mm)")
-plt.savefig("ular_2d.pdf", bbox_inches="tight")
+plt.savefig("ular_xz.pdf", bbox_inches="tight")
 
 # ---- 3D view ------------------------------------------------------------------------
 fig = plt.figure(figsize=(7, 8))
